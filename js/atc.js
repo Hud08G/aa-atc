@@ -1,81 +1,8 @@
 // aa-atc/js/atc.js
-// Handles ATC comms, Claude API calls, transcript rendering
+// Handles ATC comms via local Ollama, transcript, flight load via paste box
 
-const ANTHROPIC_KEY = 'YOUR_ANTHROPIC_KEY_HERE'; // replace with your key
-
-// ── Init ─────────────────────────────────────────────────────────────────────
-
-window.addEventListener('DOMContentLoaded', async () => {
-  await initSupabase();
-  const flight = await loadActiveFlight();
-
-  if (flight) {
-    populateFlight(flight);
-  } else {
-    document.getElementById('loading-msg').textContent =
-      'No active flight found. Generate a dispatch in the ops hub first.';
-    document.getElementById('hdr-flight').textContent = 'No active flight';
-    document.getElementById('hdr-status').textContent = 'Waiting';
-  }
-});
-
-// ── Populate flight data from Supabase row ───────────────────────────────────
-
-function populateFlight(data) {
-  ATC.callsign    = data.callsign    || 'AAL000';
-  ATC.aircraft    = data.aircraft    || '—';
-  ATC.origin      = data.origin      || '—';
-  ATC.destination = data.destination || '—';
-  ATC.route       = `${data.origin} → ${data.destination}`;
-  ATC.squawk      = data.squawk      || '—';
-  ATC.crz         = data.crz         || '—';
-  ATC.pax         = data.pax         || '—';
-  ATC.fuel        = data.fuel        || '—';
-  ATC.etd         = data.etd         || '—';
-  ATC.pilot       = data.pilot       || '—';
-  ATC.eventSeed   = data.event_seed  || 'None';
-  ATC.flightLoaded = true;
-  ATC.phase = 'Pre-departure';
-
-  // Seed the system prompt with full flight context
-  ATC.history = [
-    {
-      role: 'user',
-      content: `You are a professional ATC controller for American Airlines Virtual, a Microsoft Flight Simulator virtual airline career mode. Respond ONLY as ATC using realistic FAA phraseology. Address the pilot by full callsign (e.g. "American Twelve Twenty Two"). Keep transmissions concise. Confirm readbacks. Occasionally add realistic traffic calls or minor sequencing instructions. Never break character. Start each response with the facility name, e.g. "Fort Myers Ground, American Twelve Twenty Two,".
-
-Active flight: ${ATC.callsign} | ${ATC.aircraft} | ${ATC.origin} → ${ATC.destination}
-Route: ${data.route || '—'}
-Squawk: ${ATC.squawk} | CRZ: ${ATC.crz}
-PAX: ${ATC.pax} | Fuel: ${ATC.fuel} | ETD: ${ATC.etd}
-Pilot in command: ${ATC.pilot}
-Event seed: ${ATC.eventSeed}
-
-The pilot is at the gate pre-departure. Stand by for contact.`
-    }
-  ];
-
-  // Update UI
-  document.getElementById('fp-cs').textContent    = ATC.callsign;
-  document.getElementById('fp-ac').textContent    = ATC.aircraft;
-  document.getElementById('fp-rt').textContent    = ATC.route;
-  document.getElementById('fp-sq').textContent    = ATC.squawk;
-  document.getElementById('fp-cz').textContent    = ATC.crz;
-  document.getElementById('fp-px').textContent    = ATC.pax + ' pax';
-  document.getElementById('fp-fu').textContent    = ATC.fuel;
-  document.getElementById('fp-etd').textContent   = ATC.etd;
-  document.getElementById('fp-pilot').textContent = ATC.pilot;
-  document.getElementById('fp-event').textContent = ATC.eventSeed;
-  document.getElementById('phase-txt').textContent = ATC.phase;
-  document.getElementById('hdr-flight').textContent =
-    `${ATC.callsign} | ${ATC.aircraft} | ${ATC.route}`;
-  document.getElementById('hdr-status').textContent = 'Flight loaded';
-
-  const loadingEl = document.getElementById('loading-msg');
-  if (loadingEl) loadingEl.remove();
-
-  addEntry('SYS', 'sys',
-    `Flight ${ATC.callsign} loaded — ${ATC.aircraft} — ${ATC.route}`, 'sys');
-}
+const OLLAMA_URL = 'http://localhost:11434/api/chat';
+const OLLAMA_MODEL = 'llama3.2';
 
 // ── Frequency selector ───────────────────────────────────────────────────────
 
@@ -89,6 +16,73 @@ function setFreq(fac, freq, label, btn) {
   addEntry('SYS', 'sys', `Tuned ${label} — ${freq}`, 'sys');
 }
 
+// ── Load flight from paste box ───────────────────────────────────────────────
+
+function loadFlight() {
+  const raw = document.getElementById('fp-input').value.trim();
+  if (!raw) return;
+
+  const lines = raw.split('\n');
+  const l0 = lines[0] || '';
+  const l1 = lines[1] || '';
+  const l2 = lines[2] || '';
+  const l3 = lines[3] || '';
+
+  const csM  = l0.match(/^([A-Z0-9]+)\s*\|/);
+  const acM  = l0.match(/\|\s*([^|]+?)\s*\|/);
+  const rtM  = l0.match(/[→>]\s*(.+)$/);
+  const sqM  = l1.match(/SQ:\s*(\d+)/);
+  const czM  = l1.match(/CRZ:\s*([^|]+)/);
+  const pxM  = l2.match(/PAX:\s*(\d+)/);
+  const fuM  = l2.match(/Fuel:\s*([^|]+)/);
+  const etdM = l2.match(/ETD:\s*([^|]+)/);
+  const pilM = l3.match(/PIC:\s*(.+)$/);
+  const evM  = raw.match(/Event seed:\s*(.+)/i);
+
+  ATC.callsign     = csM  ? csM[1].trim()  : 'AAL000';
+  ATC.aircraft     = acM  ? acM[1].trim()  : '—';
+  ATC.route        = rtM  ? rtM[1].trim()  : '—';
+  ATC.squawk       = sqM  ? sqM[1]         : '—';
+  ATC.crz          = czM  ? czM[1].trim()  : '—';
+  ATC.pax          = pxM  ? pxM[1]         : '—';
+  ATC.fuel         = fuM  ? fuM[1].trim()  : '—';
+  ATC.etd          = etdM ? etdM[1].trim() : '—';
+  ATC.pilot        = pilM ? pilM[1].trim() : '—';
+  ATC.eventSeed    = evM  ? evM[1].trim()  : 'None';
+  ATC.flightLoaded = true;
+  ATC.phase        = 'Pre-departure';
+
+  ATC.history = [
+    {
+      role: 'system',
+      content: `You are a professional ATC controller for American Airlines Virtual, a Microsoft Flight Simulator virtual airline career mode. Respond ONLY as ATC using realistic FAA phraseology. Address the pilot by full spoken callsign (e.g. "American Twelve Twenty Two"). Keep transmissions concise. Confirm readbacks. Occasionally add realistic traffic calls for immersion. Never break character. Begin each response with the facility name and callsign, e.g. "Fort Myers Ground, American Twelve Twenty Two,".
+
+Active flight:
+${raw}
+
+The pilot is at the gate, pre-departure. Stand by for contact.`
+    }
+  ];
+
+  document.getElementById('fp-cs').textContent     = ATC.callsign;
+  document.getElementById('fp-ac').textContent     = ATC.aircraft;
+  document.getElementById('fp-rt').textContent     = ATC.route;
+  document.getElementById('fp-sq').textContent     = ATC.squawk;
+  document.getElementById('fp-cz').textContent     = ATC.crz;
+  document.getElementById('fp-px').textContent     = ATC.pax + ' pax';
+  document.getElementById('fp-fu').textContent     = ATC.fuel;
+  document.getElementById('fp-etd').textContent    = ATC.etd;
+  document.getElementById('fp-pilot').textContent  = ATC.pilot;
+  document.getElementById('fp-event').textContent  = ATC.eventSeed;
+  document.getElementById('phase-txt').textContent = ATC.phase;
+  document.getElementById('hdr-flight').textContent =
+    `${ATC.callsign} | ${ATC.aircraft} | ${ATC.route}`;
+  document.getElementById('hdr-status').textContent = 'Flight loaded';
+
+  addEntry('SYS', 'sys',
+    `Flight ${ATC.callsign} loaded — ${ATC.aircraft} — ${ATC.route}`, 'sys');
+}
+
 // ── Transcript ───────────────────────────────────────────────────────────────
 
 function zulu() {
@@ -99,7 +93,7 @@ function zulu() {
 
 function addEntry(caller, callerClass, msg, msgClass) {
   const t = document.getElementById('transcript');
-  const empty = t.querySelector('.empty-msg, .loading-msg');
+  const empty = t.querySelector('.empty-msg');
   if (empty) empty.remove();
   const div = document.createElement('div');
   div.className = 'tx-entry new';
@@ -133,13 +127,12 @@ async function transmit() {
 
   const context =
     `Active facility: ${facLabel} (${ATC.freq || 'no freq'}). ` +
-    `Phase: ${ATC.phase}. ` +
+    `Flight phase: ${ATC.phase}. ` +
     `Event seed: ${ATC.eventSeed}. ` +
-    `Pilot: "${msg}"`;
+    `Pilot says: "${msg}"`;
 
   ATC.history.push({ role: 'user', content: context });
 
-  // Thinking indicator
   const t = document.getElementById('transcript');
   const thinkDiv = document.createElement('div');
   thinkDiv.className = 'tx-entry';
@@ -151,23 +144,18 @@ async function transmit() {
   t.scrollTop = t.scrollHeight;
 
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await fetch(OLLAMA_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_KEY,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-allow-browser': 'true'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 400,
-        messages: ATC.history
+        model: OLLAMA_MODEL,
+        messages: ATC.history,
+        stream: false
       })
     });
 
     const data = await res.json();
-    const reply = data.content?.find(b => b.type === 'text')?.text || 'Say again?';
+    const reply = data.message?.content || 'Say again?';
 
     thinkDiv.querySelector('.tx-msg').textContent = reply;
     thinkDiv.querySelector('.tx-msg').style.opacity = '1';
@@ -175,7 +163,8 @@ async function transmit() {
     updatePhase(msg, reply);
 
   } catch (e) {
-    thinkDiv.querySelector('.tx-msg').textContent = '[Comms failure — check connection]';
+    thinkDiv.querySelector('.tx-msg').textContent =
+      '[Comms failure — is Ollama running? Check cmd: ollama serve]';
   }
 }
 
