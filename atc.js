@@ -1,60 +1,70 @@
 // aa-atc/js/atc.js
-// Handles ATC comms, Claude API calls, transcript rendering
+// Handles ATC comms, Claude API calls, transcript, flight load via paste box
 
-const ANTHROPIC_KEY = 'YOUR_ANTHROPIC_KEY_HERE'; // replace with your key
+const ANTHROPIC_KEY = 'YOUR_ANTHROPIC_KEY_HERE';
 
-// ── Init ─────────────────────────────────────────────────────────────────────
+// ── Frequency selector ───────────────────────────────────────────────────────
 
-window.addEventListener('DOMContentLoaded', async () => {
-  await initSupabase();
-  const flight = await loadActiveFlight();
+function setFreq(fac, freq, label, btn) {
+  ATC.freq = freq;
+  ATC.facility = fac;
+  ATC.facilityLabel = label;
+  document.querySelectorAll('.freq-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('freq-display').textContent = freq;
+  addEntry('SYS', 'sys', `Tuned ${label} — ${freq}`, 'sys');
+}
 
-  if (flight) {
-    populateFlight(flight);
-  } else {
-    document.getElementById('loading-msg').textContent =
-      'No active flight found. Generate a dispatch in the ops hub first.';
-    document.getElementById('hdr-flight').textContent = 'No active flight';
-    document.getElementById('hdr-status').textContent = 'Waiting';
-  }
-});
+// ── Load flight from paste box ───────────────────────────────────────────────
 
-// ── Populate flight data from Supabase row ───────────────────────────────────
+function loadFlight() {
+  const raw = document.getElementById('fp-input').value.trim();
+  if (!raw) return;
 
-function populateFlight(data) {
-  ATC.callsign    = data.callsign    || 'AAL000';
-  ATC.aircraft    = data.aircraft    || '—';
-  ATC.origin      = data.origin      || '—';
-  ATC.destination = data.destination || '—';
-  ATC.route       = `${data.origin} → ${data.destination}`;
-  ATC.squawk      = data.squawk      || '—';
-  ATC.crz         = data.crz         || '—';
-  ATC.pax         = data.pax         || '—';
-  ATC.fuel        = data.fuel        || '—';
-  ATC.etd         = data.etd         || '—';
-  ATC.pilot       = data.pilot       || '—';
-  ATC.eventSeed   = data.event_seed  || 'None';
+  const lines = raw.split('\n');
+  const l0 = lines[0] || '';
+  const l1 = lines[1] || '';
+  const l2 = lines[2] || '';
+  const l3 = lines[3] || '';
+
+  const csM   = l0.match(/^([A-Z0-9]+)\s*\|/);
+  const acM   = l0.match(/\|\s*([^|]+?)\s*\|/);
+  const rtM   = l0.match(/[→>]\s*(.+)$/);
+  const sqM   = l1.match(/SQ:\s*(\d+)/);
+  const czM   = l1.match(/CRZ:\s*([^|]+)/);
+  const pxM   = l2.match(/PAX:\s*(\d+)/);
+  const fuM   = l2.match(/Fuel:\s*([^|]+)/);
+  const etdM  = l2.match(/ETD:\s*([^|]+)/);
+  const pilM  = l3.match(/PIC:\s*(.+)$/);
+  const evM   = raw.match(/Event seed:\s*(.+)/i);
+
+  ATC.callsign    = csM  ? csM[1].trim()  : 'AAL000';
+  ATC.aircraft    = acM  ? acM[1].trim()  : '—';
+  ATC.route       = rtM  ? rtM[1].trim()  : '—';
+  ATC.squawk      = sqM  ? sqM[1]         : '—';
+  ATC.crz         = czM  ? czM[1].trim()  : '—';
+  ATC.pax         = pxM  ? pxM[1]         : '—';
+  ATC.fuel        = fuM  ? fuM[1].trim()  : '—';
+  ATC.etd         = etdM ? etdM[1].trim() : '—';
+  ATC.pilot       = pilM ? pilM[1].trim() : '—';
+  ATC.eventSeed   = evM  ? evM[1].trim()  : 'None';
   ATC.flightLoaded = true;
   ATC.phase = 'Pre-departure';
 
-  // Seed the system prompt with full flight context
+  // Build system prompt with full flight context
   ATC.history = [
     {
       role: 'user',
-      content: `You are a professional ATC controller for American Airlines Virtual, a Microsoft Flight Simulator virtual airline career mode. Respond ONLY as ATC using realistic FAA phraseology. Address the pilot by full callsign (e.g. "American Twelve Twenty Two"). Keep transmissions concise. Confirm readbacks. Occasionally add realistic traffic calls or minor sequencing instructions. Never break character. Start each response with the facility name, e.g. "Fort Myers Ground, American Twelve Twenty Two,".
+      content: `You are a professional ATC controller for American Airlines Virtual, a Microsoft Flight Simulator virtual airline career mode. Respond ONLY as ATC using realistic FAA phraseology. Address the pilot by full spoken callsign (e.g. "American Twelve Twenty Two"). Keep transmissions concise and accurate. Confirm readbacks. Occasionally introduce realistic traffic calls or sequencing instructions for immersion. Never break character. Begin each response with the facility name followed by the callsign, e.g. "Fort Myers Ground, American Twelve Twenty Two,".
 
-Active flight: ${ATC.callsign} | ${ATC.aircraft} | ${ATC.origin} → ${ATC.destination}
-Route: ${data.route || '—'}
-Squawk: ${ATC.squawk} | CRZ: ${ATC.crz}
-PAX: ${ATC.pax} | Fuel: ${ATC.fuel} | ETD: ${ATC.etd}
-Pilot in command: ${ATC.pilot}
-Event seed: ${ATC.eventSeed}
+Active flight details:
+${raw}
 
-The pilot is at the gate pre-departure. Stand by for contact.`
+The pilot is at the gate, pre-departure. Stand by for contact.`
     }
   ];
 
-  // Update UI
+  // Update sidebar
   document.getElementById('fp-cs').textContent    = ATC.callsign;
   document.getElementById('fp-ac').textContent    = ATC.aircraft;
   document.getElementById('fp-rt').textContent    = ATC.route;
@@ -70,23 +80,8 @@ The pilot is at the gate pre-departure. Stand by for contact.`
     `${ATC.callsign} | ${ATC.aircraft} | ${ATC.route}`;
   document.getElementById('hdr-status').textContent = 'Flight loaded';
 
-  const loadingEl = document.getElementById('loading-msg');
-  if (loadingEl) loadingEl.remove();
-
   addEntry('SYS', 'sys',
     `Flight ${ATC.callsign} loaded — ${ATC.aircraft} — ${ATC.route}`, 'sys');
-}
-
-// ── Frequency selector ───────────────────────────────────────────────────────
-
-function setFreq(fac, freq, label, btn) {
-  ATC.freq = freq;
-  ATC.facility = fac;
-  ATC.facilityLabel = label;
-  document.querySelectorAll('.freq-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  document.getElementById('freq-display').textContent = freq;
-  addEntry('SYS', 'sys', `Tuned ${label} — ${freq}`, 'sys');
 }
 
 // ── Transcript ───────────────────────────────────────────────────────────────
@@ -99,7 +94,7 @@ function zulu() {
 
 function addEntry(caller, callerClass, msg, msgClass) {
   const t = document.getElementById('transcript');
-  const empty = t.querySelector('.empty-msg, .loading-msg');
+  const empty = t.querySelector('.empty-msg');
   if (empty) empty.remove();
   const div = document.createElement('div');
   div.className = 'tx-entry new';
@@ -133,13 +128,12 @@ async function transmit() {
 
   const context =
     `Active facility: ${facLabel} (${ATC.freq || 'no freq'}). ` +
-    `Phase: ${ATC.phase}. ` +
+    `Flight phase: ${ATC.phase}. ` +
     `Event seed: ${ATC.eventSeed}. ` +
-    `Pilot: "${msg}"`;
+    `Pilot says: "${msg}"`;
 
   ATC.history.push({ role: 'user', content: context });
 
-  // Thinking indicator
   const t = document.getElementById('transcript');
   const thinkDiv = document.createElement('div');
   thinkDiv.className = 'tx-entry';
