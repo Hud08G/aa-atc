@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ATC Comms — AA Virtual</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/state.js"></script>
+<script src="js/atc.js" defer></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0c0f;--surface:#111318;--surface2:#181c22;--border:#1e2530;
+  --green:#00e676;--green-dim:#00c853;--green-dark:#003d1a;
+  --amber:#ffab00;--amber-dim:#ff8f00;--red:#ff1744;--blue:#448aff;
+  --text:#e8edf2;--text-dim:#6b7a8d;--text-mid:#9aaabb;
+  --mono:'Share Tech Mono',monospace;--sans:'Barlow',sans-serif;
+}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+.atc-header{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.atc-title{font-family:var(--mono);font-size:14px;color:var(--green);letter-spacing:1px}
+.atc-flight-block{font-family:var(--mono);font-size:11px;color:var(--text-dim);margin-top:3px}
+.atc-status{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-dim)}
+.status-dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+.freq-bar{background:var(--surface);border-bottom:1px solid var(--border);padding:8px 20px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex-shrink:0}
+.freq-label{font-size:10px;color:var(--text-dim);margin-right:4px;text-transform:uppercase;letter-spacing:1px;font-family:var(--mono)}
+.freq-btn{font-family:var(--mono);font-size:11px;padding:5px 14px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--text-dim);cursor:pointer;transition:all 0.15s}
+.freq-btn:hover{border-color:var(--green-dim);color:var(--text)}
+.freq-btn.active{background:var(--green-dark);border-color:var(--green);color:var(--green);font-weight:600}
+.main-body{display:grid;grid-template-columns:1fr 240px;flex:1;overflow:hidden;min-height:0}
+.transcript{overflow-y:auto;padding:14px 20px;display:flex;flex-direction:column;gap:1px;background:var(--bg)}
+.transcript::-webkit-scrollbar{width:4px}
+.transcript::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.tx-entry{padding:5px 0;border-bottom:1px solid #0d1016;font-family:var(--mono);font-size:12px;line-height:1.6;display:flex;gap:0}
+.tx-time{color:var(--text-dim);margin-right:10px;font-size:11px;flex-shrink:0;padding-top:1px}
+.tx-caller{margin-right:8px;font-weight:600;flex-shrink:0}
+.tx-caller.atc{color:var(--green)}
+.tx-caller.pilot{color:var(--amber)}
+.tx-caller.sys{color:var(--blue)}
+.tx-msg{flex:1;word-break:break-word}
+.tx-msg.atc{color:#c8f0d8}
+.tx-msg.pilot{color:#ffe4a0}
+.tx-msg.sys{color:#b0c8ff}
+.tx-entry.new{animation:fadeIn 0.25s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+.sidebar{background:var(--surface);border-left:1px solid var(--border);padding:14px;display:flex;flex-direction:column;gap:10px;overflow-y:auto}
+.sidebar::-webkit-scrollbar{width:3px}
+.sidebar::-webkit-scrollbar-thumb{background:var(--border)}
+.sidebar-section{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:5px;font-family:var(--mono)}
+.flight-panel{background:var(--surface2);border-radius:4px;border:1px solid var(--border);padding:9px 11px}
+.fp-row{display:flex;justify-content:space-between;font-size:11px;padding:2px 0;font-family:var(--mono)}
+.fp-key{color:var(--text-dim)}
+.fp-val{color:var(--text)}
+.fp-val.green{color:var(--green)}
+.divider{height:1px;background:var(--border);margin:4px 0}
+.phase-indicator{display:flex;align-items:center;gap:6px;font-size:11px;font-family:var(--mono);color:var(--green);background:var(--green-dark);border:1px solid var(--green-dim);border-radius:4px;padding:7px 10px}
+.quick-btn{width:100%;padding:7px 10px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);font-size:11px;color:var(--text-mid);cursor:pointer;text-align:left;font-family:var(--sans);transition:all 0.15s;margin-bottom:4px}
+.quick-btn:hover{border-color:var(--amber-dim);color:var(--amber);background:#1a1500}
+.quick-btn.emg{border-color:#3d0010}
+.quick-btn.emg:hover{border-color:var(--red);color:var(--red);background:#1a0008}
+.input-bar{background:var(--surface);border-top:1px solid var(--border);padding:12px 20px;display:flex;gap:10px;align-items:center;flex-shrink:0}
+.freq-display{font-family:var(--mono);font-size:14px;color:var(--green);background:var(--green-dark);border:1px solid var(--green-dim);border-radius:4px;padding:7px 14px;white-space:nowrap;min-width:120px;text-align:center}
+.atc-input{flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:9px 14px;font-family:var(--mono);font-size:12px;color:var(--text);outline:none;transition:border 0.15s}
+.atc-input::placeholder{color:var(--text-dim)}
+.atc-input:focus{border-color:var(--amber-dim)}
+.tx-btn{padding:9px 22px;background:var(--amber-dim);border:none;border-radius:4px;font-family:var(--sans);font-size:13px;font-weight:600;color:#000;cursor:pointer;transition:background 0.15s}
+.tx-btn:hover{background:var(--amber)}
+.empty-msg{color:var(--text-dim);font-family:var(--mono);font-size:12px;text-align:center;padding:3rem;opacity:0.5;width:100%}
+.loading-msg{color:var(--blue);font-family:var(--mono);font-size:12px;text-align:center;padding:2rem;width:100%}
+</style>
+</head>
+<body>
+
+<div class="atc-header">
+  <div>
+    <div class="atc-title">ATC COMMS — AMERICAN AIRLINES VIRTUAL</div>
+    <div class="atc-flight-block" id="hdr-flight">Connecting to ops...</div>
+  </div>
+  <div class="atc-status"><div class="status-dot"></div><span id="hdr-status">Standby</span></div>
+</div>
+
+<div class="freq-bar">
+  <span class="freq-label">Facility</span>
+  <button class="freq-btn" onclick="setFreq('GND','121.900','Ground',this)">Ground</button>
+  <button class="freq-btn" onclick="setFreq('TWR','118.300','Tower',this)">Tower</button>
+  <button class="freq-btn" onclick="setFreq('DEP','124.750','Departure',this)">Departure</button>
+  <button class="freq-btn" onclick="setFreq('CTR','132.425','Center',this)">Center</button>
+  <button class="freq-btn" onclick="setFreq('APP','119.100','Approach',this)">Approach</button>
+  <button class="freq-btn" onclick="setFreq('ATIS','135.000','ATIS',this)">ATIS</button>
+</div>
+
+<div class="main-body">
+  <div class="transcript" id="transcript">
+    <div class="loading-msg" id="loading-msg">Pulling active flight from ops...</div>
+  </div>
+
+  <div class="sidebar">
+    <div>
+      <div class="sidebar-section">Flight data</div>
+      <div class="flight-panel">
+        <div class="fp-row"><span class="fp-key">Callsign</span><span class="fp-val green" id="fp-cs">—</span></div>
+        <div class="fp-row"><span class="fp-key">Aircraft</span><span class="fp-val" id="fp-ac">—</span></div>
+        <div class="fp-row"><span class="fp-key">Route</span><span class="fp-val" id="fp-rt">—</span></div>
+        <div class="fp-row"><span class="fp-key">Squawk</span><span class="fp-val" id="fp-sq">—</span></div>
+        <div class="fp-row"><span class="fp-key">CRZ</span><span class="fp-val" id="fp-cz">—</span></div>
+        <div class="divider"></div>
+        <div class="fp-row"><span class="fp-key">PAX</span><span class="fp-val" id="fp-px">—</span></div>
+        <div class="fp-row"><span class="fp-key">Fuel</span><span class="fp-val" id="fp-fu">—</span></div>
+        <div class="fp-row"><span class="fp-key">ETD</span><span class="fp-val" id="fp-etd">—</span></div>
+        <div class="divider"></div>
+        <div class="fp-row"><span class="fp-key">Pilot</span><span class="fp-val" id="fp-pilot">—</span></div>
+        <div class="fp-row"><span class="fp-key">Event</span><span class="fp-val" id="fp-event">None</span></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="sidebar-section">Phase</div>
+      <div class="phase-indicator"><span id="phase-txt">No flight</span></div>
+    </div>
+
+    <div>
+      <div class="sidebar-section">Quick requests</div>
+      <button class="quick-btn" onclick="quickSend('Request IFR clearance to destination as filed')">IFR clearance</button>
+      <button class="quick-btn" onclick="quickSend('Request taxi to runway')">Taxi to runway</button>
+      <button class="quick-btn" onclick="quickSend('Ready for departure')">Ready for departure</button>
+      <button class="quick-btn" onclick="quickSend('Request flight following')">Flight following</button>
+      <button class="quick-btn" onclick="quickSend('Request higher altitude')">Request higher</button>
+      <button class="quick-btn" onclick="quickSend('Request lower altitude')">Request lower</button>
+      <button class="quick-btn" onclick="quickSend('Request deviation for weather')">Wx deviation</button>
+      <button class="quick-btn" onclick="quickSend('Requesting descent to initial approach fix')">Request descent</button>
+      <button class="quick-btn" onclick="quickSend('Request ILS approach')">ILS approach</button>
+      <button class="quick-btn" onclick="quickSend('Going around')">Go around</button>
+      <button class="quick-btn emg" onclick="quickSend('MAYDAY MAYDAY MAYDAY — declaring emergency')">MAYDAY</button>
+      <button class="quick-btn emg" onclick="quickSend('PAN-PAN PAN-PAN — urgency condition')">PAN-PAN</button>
+    </div>
+  </div>
+</div>
+
+<div class="input-bar">
+  <div class="freq-display" id="freq-display">— — — . — —</div>
+  <input class="atc-input" id="pilot-input" placeholder="Type your transmission and press Enter or TX..." onkeydown="if(event.key==='Enter')transmit()" />
+  <button class="tx-btn" onclick="transmit()">TX ↗</button>
+</div>
+
+</body>
+</html>
